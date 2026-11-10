@@ -6,9 +6,6 @@ export default {
         const time = new Date().toLocaleTimeString('en-US', { timeZone: config.tz, hour12: true });
         const date = new Date().toLocaleDateString('en-GB', { timeZone: config.tz });
         const channelUrl = 'https://whatsapp.com/channel/0029Vb9FRVV8F2pDezlyrD0q';
-        
-        // Yahan apni image ka permanent link dalein (Filhal maine ek placeholder lagaya hai)
-        const imageUrl = 'https://i.ibb.co/6PZk1Z5/hacker.jpg';
 
         const menuText = `
 ╭━━━〔 *${config.botName}* 〕━━━⬣
@@ -29,13 +26,18 @@ export default {
 ┃ 📊 ${config.prefix}status
 ╰━━━━━━━━━━━━━━━━━━⬣
 
+╭━━━〔 *AI & GPT* 〕━━━⬣
+┃ 🤖 ${config.prefix}ai <text>
+┃ 💬 ${config.prefix}gpt <text>
+╰━━━━━━━━━━━━━━━━━━⬣
+
 ╭━━━〔 *DOWNLOADER* 〕━━━⬣
 ┃ 🎵 ${config.prefix}play <song>
 ┃ 🎬 ${config.prefix}ytmp4 <url>
 ┃ 📥 ${config.prefix}tt <url>
 ┃ 📸 ${config.prefix}insta <url>
 ┃ 📘 ${config.prefix}fb <url>
-┃ 🎧 ${config.prefix}spotify <url>
+┃ 🎧 ${config.prefix}song <spotify>
 ┃ 👁️ ${config.prefix}vv (View Once)
 ┃ 💾 ${config.prefix}sv (Save Status)
 ╰━━━━━━━━━━━━━━━━━━⬣
@@ -47,6 +49,7 @@ export default {
 ┃ 💻 ${config.prefix}hack
 ┃ 🎭 ${config.prefix}rch <url>
 ┃ 🔋 ${config.prefix}battery
+┃ 🎙️ ${config.prefix}voice
 ╰━━━━━━━━━━━━━━━━━━⬣
 
 ╭━━━〔 *GROUP ADMIN* 〕━━━⬣
@@ -61,38 +64,19 @@ export default {
 > *Powered by HACKER-MD Engine ⚡*
 `;
 
-        try {
-            // Pehle try karega image ke sath bhejne ki
-            await sock.sendMessage(msg.key.remoteJid, {
-                image: { url: imageUrl },
-                caption: menuText,
-                contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    externalAdReply: {
-                        title: "HACKER-MD OFFICIAL CHANNEL",
-                        body: "Tap to join for latest updates!",
-                        mediaType: 1,
-                        sourceUrl: channelUrl
-                    }
+        // Bina image ke direct text bhejna, taake koi 404 error na aaye
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: menuText,
+            contextInfo: {
+                forwardingScore: 999,
+                isForwarded: true,
+                externalAdReply: {
+                    title: "HACKER-MD OFFICIAL CHANNEL",
+                    body: "Tap to join for latest updates!",
+                    mediaType: 1,
+                    sourceUrl: channelUrl
                 }
-            }, { quoted: msg });
-        } catch (error) {
-            // Agar image download fail ho jaye (404), toh sirf text bhej dega
-            console.log('Image load nahi hui, sirf text bhej rahe hain...');
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: menuText,
-                contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    externalAdReply: {
-                        title: "HACKER-MD OFFICIAL CHANNEL",
-                        body: "Tap to join for latest updates!",
-                        mediaType: 1,
-                        sourceUrl: channelUrl
-                    }
-                }
-            }, { quoted: msg });
-        }
+            }
+        }, { quoted: msg });
     }
 }
