@@ -17,7 +17,6 @@ global.messageCache = new Map();
 global.botInstances = new Map(); 
 global.antiDeleteStatus = false;
 
-// Crash se bachne ke liye global handlers
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
 process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
 
@@ -54,18 +53,17 @@ class BotClient {
             version,
             logger,
             printQRInTerminal: false,
-            // MAC OS SPOOFING (Baileys ka naam chupane ke liye)
             browser: ['Mac OS', 'Safari', '17.0'], 
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
             },
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true
+            generateHighQualityLinkPreview: true,
+            syncFullHistory: false
         });
 
         this.setupEvents(saveCreds);
-        
         global.botInstances.set(this.phoneNumber, this);
         return this;
     }
@@ -105,7 +103,6 @@ class BotClient {
             } else if (connection === 'open') {
                 console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
                 
-                // Welcome Message (Safe Send)
                 await delay(2000);
                 try {
                     const botId = this.sock.user.id;
@@ -140,24 +137,20 @@ class BotClient {
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
                            : '';
 
-                // Khud ke messages ka check (Message Yourself ke liye)
                 if (msg.key.fromMe) {
                     if (!body || !body.startsWith(config.prefix)) return; 
                 }
 
-                // Anti-Delete Cache
                 const textMsg = body || 'Media';
                 global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
                 if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
 
-                // Auto-React trigger
                 for (const [name, p] of global.plugins) {
                     if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
                 }
 
                 if (!body || !body.startsWith(config.prefix)) return;
 
-                // Auto Read (Public mode)
                 if (config.mode === 'public' && !msg.key.fromMe) {
                     await this.sock.readMessages([msg.key]).catch(() => {});
                     await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid).catch(() => {});
@@ -166,7 +159,6 @@ class BotClient {
                 const args = body.slice(config.prefix.length).trim().split(/ +/);
                 const commandName = args.shift().toLowerCase();
 
-                // Command Execute (Safe execution)
                 const plugin = global.plugins.get(commandName) || Array.from(global.plugins.values()).find(p => p.aliases && p.aliases.includes(commandName));
                 
                 if (plugin) {
@@ -217,7 +209,7 @@ async function loadAllPlugins() {
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= WEB SERVER =================
+// ================= WEB SERVER & AUTO-CLEAR SESSION =================
 const app = express();
 app.use(express.json());
 
@@ -291,14 +283,7 @@ app.post('/api/pair', async (req, res) => {
     const sessionPath = path.join(config.sessionDir, `session_${cleanNumber}`);
 
     try {
-        // Agar pehle se bot chal raha hai, toh usko disconnect karein
-        if (global.botInstances.has(cleanNumber)) {
-            const oldBot = global.botInstances.get(cleanNumber);
-            if (oldBot.sock) oldBot.sock.end(undefined);
-            global.botInstances.delete(cleanNumber);
-        }
-
-        // Purana kharab session delete karein taake Bad MAC error na aaye
+        // Purana session 100% delete karein taake Bad MAC error na aaye
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
             console.log(`\x1b[33m[SESSION] Cleared old session for ${cleanNumber}\x1b[0m`);
@@ -324,13 +309,4 @@ app.get('/health', (req, res) => res.status(200).send('OK'));
     app.listen(config.port, () => {
         console.log(`\n\x1b[32m[WEB SERVER] Hacker Page running on port ${config.port}\x1b[0m`);
     });
-
-    // Agar env mein number pehle se hai, toh auto connect hoga
-    if (config.pairNumbers && config.pairNumbers.length > 0) {
-        for (const number of config.pairNumbers) {
-            const client = new BotClient(number);
-            await client.initialize().catch(err => console.error("Startup Connect Error:", err.message));
-            await delay(2000);
-        }
-    }
 })();
