@@ -60,7 +60,14 @@ class BotClient {
             },
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: true,
-            syncFullHistory: false
+            syncFullHistory: false,
+            // YEH HAI ASAL FIX (Bad MAC khatam karne ke liye)
+            getMessage: async (key) => {
+                if (global.messageCache.has(key.id)) {
+                    return global.messageCache.get(key.id).media;
+                }
+                return { conversation: 'HACKER-MD' };
+            }
         });
 
         this.setupEvents(saveCreds);
@@ -137,13 +144,13 @@ class BotClient {
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
                            : '';
 
+                // Cache for getMessage fix
+                global.messageCache.set(msg.key.id, { text: body, media: msg.message });
+                if (global.messageCache.size > 500) global.messageCache.delete(global.messageCache.keys().next().value);
+
                 if (msg.key.fromMe) {
                     if (!body || !body.startsWith(config.prefix)) return; 
                 }
-
-                const textMsg = body || 'Media';
-                global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
-                if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
 
                 for (const [name, p] of global.plugins) {
                     if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
@@ -283,7 +290,6 @@ app.post('/api/pair', async (req, res) => {
     const sessionPath = path.join(config.sessionDir, `session_${cleanNumber}`);
 
     try {
-        // Purana session 100% delete karein taake Bad MAC error na aaye
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
             console.log(`\x1b[33m[SESSION] Cleared old session for ${cleanNumber}\x1b[0m`);
