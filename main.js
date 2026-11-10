@@ -9,13 +9,13 @@ import express from 'express';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { config } from './config.js';
 
 // ================= GLOBAL VARIABLES & ERROR HANDLERS =================
 global.plugins = new Map();
 global.messageCache = new Map();
 global.botInstances = new Map(); 
-global.antiDeleteStatus = false;
 
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
 process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
@@ -60,12 +60,9 @@ class BotClient {
             },
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: true,
-            syncFullHistory: false,
-            // YEH HAI ASAL FIX (Bad MAC khatam karne ke liye)
+            // BAD MAC FIX (WhatsApp ko lagta hai purane messages cache se aaye hain)
             getMessage: async (key) => {
-                if (global.messageCache.has(key.id)) {
-                    return global.messageCache.get(key.id).media;
-                }
+                if (global.messageCache.has(key.id)) return global.messageCache.get(key.id).media;
                 return { conversation: 'HACKER-MD' };
             }
         });
@@ -75,20 +72,6 @@ class BotClient {
         return this;
     }
 
-    async requestPairingCode() {
-        await delay(3000);
-        try {
-            const code = await this.sock.requestPairingCode(this.phoneNumber);
-            console.log(`\n\x1b[33m╔══════════════════════════════════════════════════╗`);
-            console.log(`\x1b[32m   [PAIRING CODE for ${this.phoneNumber}]: \x1b[1m\x1b[36m${code}\x1b[0m\x1b[32m`);
-            console.log(`\x1b[33m╚══════════════════════════════════════════════════╝\x1b[0m\n`);
-            return code;
-        } catch (error) {
-            console.error(`\x1b[31m[PAIRING ERROR]: ${error.message}\x1b[0m`);
-            throw error;
-        }
-    }
-
     setupEvents(saveCreds) {
         this.sock.ev.on('creds.update', saveCreds);
 
@@ -96,16 +79,10 @@ class BotClient {
             const { connection, lastDisconnect } = update;
             
             if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
-                console.log(`\x1b[31m[⚠️ ${this.phoneNumber}] Connection Closed. Reconnecting: ${shouldReconnect}\x1b[0m`);
-                
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
                 if (shouldReconnect) {
                     await delay(5000);
-                    this.initialize().catch(err => console.error("Reconnect error:", err.message));
-                } else {
-                    global.botInstances.delete(this.phoneNumber);
+                    this.initialize().catch(() => {});
                 }
             } else if (connection === 'open') {
                 console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
@@ -113,55 +90,22 @@ class BotClient {
                 await delay(2000);
                 try {
                     const botId = this.sock.user.id;
-                    const welcomeText = `
-╭━━━〔 *${config.botName}* 〕━━━⬣
-┃ ✅ *CONNECTION SUCCESSFUL!*
-┃ 
-┃ 👑 *Owner:* Hussain
-┃ ⚡ *Status:* Online & Active
-┃ 🧩 *Prefix:* [ ${config.prefix} ]
-┃ 🚀 *Engine:* Premium Multi-Device
-╰━━━━━━━━━━━━━━━━━━⬣
-
-> *Welcome to HACKER-MD Engine!*
-> *Type ${config.prefix}menu to explore all commands.*
-`;
+                    const welcomeText = `✅ *HACKER-MD IS ONLINE!*\n\nBot successfully connected to your WhatsApp.\nType ${config.prefix}menu to start.`;
                     await this.sock.sendMessage(botId, { text: welcomeText });
-                } catch (err) {
-                    console.error('Welcome message error:', err.message);
-                }
+                } catch (err) {}
             }
         });
 
         this.sock.ev.on('messages.upsert', async (chatUpdate) => {
             try {
                 const msg = chatUpdate.messages[0];
-                if (!msg.message) return;
-                if (msg.key.remoteJid === 'status@broadcast') return;
+                if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
 
-                const type = Object.keys(msg.message)[0];
-                const body = (type === 'conversation') ? msg.message.conversation 
-                           : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
-                           : '';
-
-                // Cache for getMessage fix
+                const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
                 global.messageCache.set(msg.key.id, { text: body, media: msg.message });
-                if (global.messageCache.size > 500) global.messageCache.delete(global.messageCache.keys().next().value);
 
-                if (msg.key.fromMe) {
-                    if (!body || !body.startsWith(config.prefix)) return; 
-                }
-
-                for (const [name, p] of global.plugins) {
-                    if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
-                }
-
-                if (!body || !body.startsWith(config.prefix)) return;
-
-                if (config.mode === 'public' && !msg.key.fromMe) {
-                    await this.sock.readMessages([msg.key]).catch(() => {});
-                    await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid).catch(() => {});
-                }
+                if (msg.key.fromMe && (!body || !body.startsWith(config.prefix))) return;
+                if (!body.startsWith(config.prefix)) return;
 
                 const args = body.slice(config.prefix.length).trim().split(/ +/);
                 const commandName = args.shift().toLowerCase();
@@ -169,33 +113,14 @@ class BotClient {
                 const plugin = global.plugins.get(commandName) || Array.from(global.plugins.values()).find(p => p.aliases && p.aliases.includes(commandName));
                 
                 if (plugin) {
-                    console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
                     await plugin.execute(this.sock, msg, args, config).catch(err => {
                         console.error(`\x1b[31m[PLUGIN ERROR - ${commandName}]:\x1b[0m`, err.message);
                     });
                 }
-            } catch (err) {
-                console.error('\x1b[31m[MESSAGE HANDLER ERROR]\x1b[0m', err.message);
-            }
-        });
-
-        this.sock.ev.on('messages.update', async (updates) => {
-            try {
-                for (const update of updates) {
-                    if (update.update.message === null || update.update.messageStubType === 1) {
-                        const plugin = global.plugins.get('antidelete');
-                        if (plugin && plugin.onDelete) {
-                            await plugin.onDelete(this.sock, update).catch(() => {});
-                        }
-                    }
-                }
-            } catch (e) {}
+            } catch (err) {}
         });
     }
 }
-
-// ================= SAFE PLUGIN LOADER =================
-const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
 
 async function loadAllPlugins() {
     const pluginsDir = path.join(process.cwd(), 'plugins');
@@ -203,116 +128,52 @@ async function loadAllPlugins() {
 
     const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
     for (const file of files) {
-        if (EXCLUDED_PLUGINS.includes(file)) continue;
+        if (['otp-forward.js', 'numpanel.js'].includes(file)) continue;
         try {
             const module = await import(`./plugins/${file}`);
-            if (module.default && module.default.command) {
-                global.plugins.set(module.default.command.toLowerCase(), module.default);
-            }
-        } catch (err) {
-            console.error(`\x1b[31m[PLUGIN LOAD ERROR] ${file}:\x1b[0m`, err.message);
-        }
+            if (module.default && module.default.command) global.plugins.set(module.default.command.toLowerCase(), module.default);
+        } catch (err) {}
     }
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= WEB SERVER & AUTO-CLEAR SESSION =================
+// ================= WEB SERVER & SMART START (Fallback Setup) =================
 const app = express();
 app.use(express.json());
-
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>HACKER-MD Pairing</title>
-        <style>
-            body { background-color: #0d1117; color: #00ff00; font-family: 'Courier New', Courier, monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .container { background: #161b22; padding: 30px; border-radius: 10px; border: 1px solid #00ff00; box-shadow: 0 0 15px #00ff00; text-align: center; width: 90%; max-width: 400px; }
-            h1 { margin-top: 0; font-size: 24px; text-shadow: 0 0 10px #00ff00; }
-            input { width: 90%; padding: 10px; margin: 15px 0; background: #0d1117; border: 1px solid #00ff00; color: #00ff00; font-size: 16px; outline: none; }
-            button { background: #00ff00; color: #0d1117; border: none; padding: 10px 20px; font-size: 16px; cursor: pointer; font-weight: bold; width: 100%; }
-            button:hover { background: #00cc00; }
-            #code-box { margin-top: 20px; font-size: 28px; font-weight: bold; color: #fff; text-shadow: 0 0 10px #fff; letter-spacing: 5px; display: none; }
-            #status { margin-top: 15px; font-size: 14px; color: #888; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>HACKER-MD</h1>
-            <p>Enter bot's WhatsApp number</p>
-            <input type="text" id="number" placeholder="e.g. 923001234567">
-            <button onclick="getCode()">Get Pairing Code</button>
-            <div id="code-box"></div>
-            <div id="status"></div>
-        </div>
-
-        <script>
-            async function getCode() {
-                const number = document.getElementById('number').value;
-                if(!number) return alert('Please enter a number!');
-                
-                document.getElementById('status').innerText = 'Generating code (Clearing old session)...';
-                document.getElementById('code-box').style.display = 'none';
-
-                try {
-                    const res = await fetch('/api/pair', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ number: number })
-                    });
-                    const data = await res.json();
-                    
-                    if(data.code) {
-                        document.getElementById('code-box').innerText = data.code;
-                        document.getElementById('code-box').style.display = 'block';
-                        document.getElementById('status').innerText = 'Enter this code in WhatsApp (Linked Devices).';
-                    } else {
-                        document.getElementById('status').innerText = 'Error: ' + (data.error || 'Unknown error');
-                    }
-                } catch (err) {
-                    document.getElementById('status').innerText = 'Failed to connect to server.';
-                }
-            }
-        </script>
-    </body>
-    </html>
-    `);
-});
-
-app.post('/api/pair', async (req, res) => {
-    const { number } = req.body;
-    if (!number) return res.status(400).json({ error: 'Number is required' });
-
-    const cleanNumber = number.replace(/[^0-9]/g, '');
-    const sessionPath = path.join(config.sessionDir, `session_${cleanNumber}`);
-
-    try {
-        if (fs.existsSync(sessionPath)) {
-            fs.rmSync(sessionPath, { recursive: true, force: true });
-            console.log(`\x1b[33m[SESSION] Cleared old session for ${cleanNumber}\x1b[0m`);
-        }
-
-        const client = new BotClient(cleanNumber);
-        await client.initialize();
-        const code = await client.requestPairingCode();
-        res.json({ code: code });
-
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
+app.get('/', (req, res) => res.send('HACKER-MD is Alive!'));
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
-// ================= MAIN ENGINE START =================
+app.listen(config.port, () => {
+    console.log(`\n\x1b[32m[WEB SERVER] Running on port ${config.port}\x1b[0m`);
+});
+
 (async () => {
     displayBanner();
     await loadAllPlugins();
 
-    app.listen(config.port, () => {
-        console.log(`\n\x1b[32m[WEB SERVER] Hacker Page running on port ${config.port}\x1b[0m`);
-    });
+    const isGitHub = process.env.GITHUB_ACTIONS === 'true';
+
+    if (isGitHub) {
+        console.log('\x1b[33m[GITHUB FALLBACK] GitHub par chal raha hai. Railway ka wait kar rahe hain...\x1b[0m');
+        
+        if (process.env.RAILWAY_URL) {
+            setInterval(async () => {
+                try {
+                    const res = await axios.get(`${process.env.RAILWAY_URL}/health`, { timeout: 5000 });
+                    if (res.status === 200) {
+                        console.log('\x1b[32m[RAILWAY ONLINE] Railway deploy ho gaya hai. GitHub se bot band kiya ja raha hai...\x1b[0m');
+                        process.exit(0); // GitHub runner ko band kar dega
+                    }
+                } catch (e) {
+                    // Railway abhi offline hai, GitHub chalta rahega
+                }
+            }, 15000); 
+        }
+    }
+
+    // Bot start karein (Dono jagah chalega, SESSION_ID se connect hoga)
+    if (config.pairNumbers.length > 0) {
+        const client = new BotClient(config.pairNumbers[0]);
+        await client.initialize().catch(err => console.error(err.message));
+    }
 })();
