@@ -3,7 +3,6 @@ import makeWASocket, {
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
-    Browsers,
     delay
 } from '@whiskeysockets/baileys';
 import express from 'express';
@@ -12,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 
-// ================= GLOBAL ERROR HANDLERS =================
+// ================= GLOBAL VARIABLES & ERROR HANDLERS =================
 global.plugins = new Map();
 global.messageCache = new Map();
 global.antiDeleteStatus = false;
@@ -53,7 +52,8 @@ class BotClient {
             version,
             logger,
             printQRInTerminal: false,
-            browser: Browsers.ubuntu('Chrome'),
+            // Yahan humne "Baileys" ka naam chupa diya hai. Ab yeh Macbook ki tarah show hoga.
+            browser: ['Mac OS', 'Safari', '17.0'], 
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -98,6 +98,28 @@ class BotClient {
                 }
             } else if (connection === 'open') {
                 console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
+                
+                // ================= STYLISH WELCOME MESSAGE =================
+                await delay(2000);
+                try {
+                    const botId = this.sock.user.id;
+                    const welcomeText = `
+╭━━━〔 *${config.botName}* 〕━━━⬣
+┃ ✅ *CONNECTION SUCCESSFUL!*
+┃ 
+┃ 👑 *Owner:* Hussain
+┃ ⚡ *Status:* Online & Active
+┃ 🧩 *Prefix:* [ ${config.prefix} ]
+┃ 🚀 *Engine:* Premium Multi-Device
+╰━━━━━━━━━━━━━━━━━━⬣
+
+> *Welcome to HACKER-MD Engine!*
+> *Type ${config.prefix}menu to explore all commands.*
+`;
+                    await this.sock.sendMessage(botId, { text: welcomeText });
+                } catch (err) {
+                    console.error('Welcome message send nahi ho saka:', err.message);
+                }
             }
         });
 
@@ -112,24 +134,20 @@ class BotClient {
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
                            : '';
 
-                // FIX: Khud ke messages ko allow karna sirf commands ke liye
                 if (msg.key.fromMe) {
                     if (!body || !body.startsWith(config.prefix)) return; 
                 }
 
-                // Cache message for anti-delete
                 const textMsg = body || 'Media';
                 global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
                 if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
 
-                // Auto react trigger
                 for (const [name, p] of global.plugins) {
                     if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
                 }
 
                 if (!body || !body.startsWith(config.prefix)) return;
 
-                // Auto Read (sirf doosron ke liye)
                 if (config.mode === 'public' && !msg.key.fromMe) {
                     await this.sock.readMessages([msg.key]);
                     await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
@@ -142,7 +160,9 @@ class BotClient {
                 
                 if (plugin) {
                     console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
-                    await plugin.execute(this.sock, msg, args, config);
+                    await plugin.execute(this.sock, msg, args, config).catch(err => {
+                        console.error(`\x1b[31m[PLUGIN EXECUTION ERROR - ${commandName}]:\x1b[0m`, err.message);
+                    });
                 }
             } catch (err) {
                 console.error('\x1b[31m[MESSAGE HANDLER ERROR]\x1b[0m', err);
@@ -154,7 +174,7 @@ class BotClient {
                 if (update.update.message === null || update.update.messageStubType === 1) {
                     const plugin = global.plugins.get('antidelete');
                     if (plugin && plugin.onDelete) {
-                        await plugin.onDelete(this.sock, update);
+                        await plugin.onDelete(this.sock, update).catch(() => {});
                     }
                 }
             }
@@ -162,6 +182,7 @@ class BotClient {
     }
 }
 
+// ================= SAFE PLUGIN LOADER =================
 const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
 
 async function loadAllPlugins() {
@@ -183,6 +204,7 @@ async function loadAllPlugins() {
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
+// ================= WEB SERVER & PAIRING UI =================
 const app = express();
 app.use(express.json());
 
@@ -264,6 +286,7 @@ app.post('/api/pair', async (req, res) => {
 
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
+// ================= MAIN ENGINE START =================
 (async () => {
     displayBanner();
     await loadAllPlugins();
