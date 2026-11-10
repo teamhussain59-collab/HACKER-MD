@@ -6,156 +6,197 @@ import makeWASocket, {
     Browsers,
     delay
 } from '@whiskeysockets/baileys';
-import express from 'express';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 
-// ================= GLOBAL VARIABLES =================
-global.sock = null;
-global.plugins = new Map();
-let pairingCode = null;
-
-// ================= WEB SERVER (RAILWAY) =================
-const app = express();
-app.use(express.json());
-app.get('/health', (req, res) => res.status(200).send({ status: 'HACKER-MD is alive', uptime: process.uptime() }));
-app.get('/pair', (req, res) => {
-    if (!pairingCode) return res.status(400).send({ error: 'Code not ready or already paired.' });
-    res.send({ code: pairingCode });
+// ================= GLOBAL ERROR HANDLERS =================
+process.on('uncaughtException', (err) => {
+    console.error('\x1b[31m[ANTI-CRASH] Uncaught Exception:\x1b[0m', err.message);
 });
-app.listen(config.port, () => {
-    console.log(`[WEB] Express server running on port ${config.port}`);
+process.on('unhandledRejection', (reason) => {
+    console.error('\x1b[31m[ANTI-CRASH] Unhandled Rejection:\x1b[0m', reason);
 });
 
-// ================= ASCII BANNER =================
-console.log(`
-\x1b[32m=============================================
-   _   _    _    ____ _  _______ ____    ____  
-  | | | |  / \  / ___| |/ / ____|  _ \  |  _ \ 
-  | |_| | / _ \| |   | ' /|  _| | |_) | | | | |
-  |  _  |/ ___ \ |___| . \| |___|  _ <  | |_| |
-  |_| |_/_/   \_\____|_|\_\_____|_| \_\ |____/ 
-                                              
-  >> HACKER-MD Professional WhatsApp Bot <<
-  >> Created for: ${config.owner || 'Hussain'} <<
-=============================================\x1b[0m
-`);
+// ================= STYLISH BANNER =================
+const displayBanner = () => {
+    console.log('\x1b[36m%s\x1b[0m', `
+    ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗       ███╗   ███╗██████╗ 
+    ██║  ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗      ████╗ ████║██╔══██╗
+    ███████║███████║██║     █████╔╝ █████╗  ██████╔╝████╗ ██╔████╔██║██║  ██║
+    ██╔══██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗╚═══╝ ██║╚██╔╝██║██║  ██║
+    ██║  ██║██║  ██║╚██████╗██║  ██╗███████╗██║  ██║      ██║ ╚═╝ ██║██████╔╝
+    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝      ╚═╝     ╚═╝╚═════╝ 
+    `);
+    console.log('\x1b[35m=========================================================\x1b[0m');
+    console.log('\x1b[33m       >> ULTIMATE WHATSAPP BOT ENGINE <<\x1b[0m');
+    console.log('\x1b[32m       >> CREATED BY: HUSSAIN <<\x1b[0m');
+    console.log('\x1b[35m=========================================================\x1b[0m\n');
+};
+
+// ================= BOT CLIENT CLASS =================
+class BotClient {
+    constructor(phoneNumber) {
+        this.phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+        this.sessionPath = path.join(config.sessionDir, `session_${this.phoneNumber}`);
+        this.sock = null;
+    }
+
+    async initialize() {
+        if (!fs.existsSync(this.sessionPath)) {
+            fs.mkdirSync(this.sessionPath, { recursive: true });
+        }
+
+        const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
+        const { version } = await fetchLatestBaileysVersion();
+        const logger = pino({ level: 'silent' });
+
+        this.sock = makeWASocket({
+            version,
+            logger,
+            printQRInTerminal: false,
+            browser: Browsers.ubuntu('Chrome'),
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger),
+            },
+            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
+            syncFullHistory: false
+        });
+
+        this.setupEvents(saveCreds);
+        
+        if (!this.sock.authState.creds.registered) {
+            await this.requestPairingCode();
+        }
+    }
+
+    async requestPairingCode() {
+        await delay(3000);
+        try {
+            const code = await this.sock.requestPairingCode(this.phoneNumber);
+            console.log(`\n\x1b[33m╔══════════════════════════════════════════════════╗`);
+            console.log(`\x1b[32m   [PAIRING CODE for ${this.phoneNumber}]: \x1b[1m\x1b[36m${code}\x1b[0m\x1b[32m`);
+            console.log(`\x1b[33m╚══════════════════════════════════════════════════╝\x1b[0m\n`);
+        } catch (error) {
+            console.error(`\x1b[31m[PAIRING ERROR] ${this.phoneNumber}: ${error.message}\x1b[0m`);
+        }
+    }
+
+    setupEvents(saveCreds) {
+        this.sock.ev.on('creds.update', saveCreds);
+
+        this.sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+            
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.log(`\x1b[31m[⚠️ ${this.phoneNumber}] Connection Closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}\x1b[0m`);
+                
+                if (shouldReconnect) {
+                    await delay(5000);
+                    this.initialize();
+                }
+            } else if (connection === 'open') {
+                console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
+            }
+        });
+
+        this.sock.ev.on('messages.upsert', async (chatUpdate) => {
+            try {
+                const msg = chatUpdate.messages[0];
+                if (!msg.message || msg.key.fromMe) return;
+                if (msg.key.remoteJid === 'status@broadcast') return;
+
+                await this.handleMessage(msg);
+            } catch (err) {
+                console.error('\x1b[31m[MESSAGE HANDLER ERROR]\x1b[0m', err);
+            }
+        });
+    }
+
+    async handleMessage(msg) {
+        const type = Object.keys(msg.message)[0];
+        const body = (type === 'conversation') ? msg.message.conversation 
+                   : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
+                   : '';
+
+        if (!body || !body.startsWith(config.prefix)) return;
+
+        // Public Mode Auto-Read & Typing
+        if (config.mode === 'public') {
+            await this.sock.readMessages([msg.key]);
+            await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
+        }
+
+        const args = body.slice(config.prefix.length).trim().split(/ +/);
+        const commandName = args.shift().toLowerCase();
+
+        const plugin = global.plugins.get(commandName);
+        if (plugin) {
+            try {
+                console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
+                await plugin.execute(this.sock, msg, args, config);
+            } catch (error) {
+                console.error(`\x1b[31m[PLUGIN ERROR: ${commandName}]\x1b[0m`, error);
+            }
+        }
+    }
+}
 
 // ================= PLUGIN LOADER =================
-const pluginsDir = path.join(process.cwd(), 'plugins');
-if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir, { recursive: true });
+global.plugins = new Map();
+// OTP aur Numpanel blocked rahenge (Safety policy)
+const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
 
-async function loadPlugins() {
+async function loadAllPlugins() {
+    const pluginsDir = path.join(process.cwd(), 'plugins');
+    if (!fs.existsSync(pluginsDir)) {
+        console.log('\x1b[33m[WARN] No plugins directory found.\x1b[0m');
+        return;
+    }
+
     const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
+    
     for (const file of files) {
+        if (EXCLUDED_PLUGINS.includes(file)) {
+            console.log(`\x1b[31m[BLOCKED] ${file} (Excluded by rules)\x1b[0m`);
+            continue;
+        }
+
         try {
             const module = await import(`./plugins/${file}`);
             if (module.default && module.default.command) {
                 global.plugins.set(module.default.command.toLowerCase(), module.default);
-                console.log(`[PLUGIN] Loaded: ${module.default.command}`);
             }
         } catch (err) {
-            console.error(`[PLUGIN ERROR] Failed to load ${file}:`, err.message);
+            console.error(`\x1b[31m[PLUGIN LOAD ERROR] ${file}:\x1b[0m`, err.message);
         }
     }
+    console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= WHATSAPP CONNECTION =================
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState(config.sessionDir);
-    const { version } = await fetchLatestBaileysVersion();
-    const logger = pino({ level: 'silent' });
-
-    global.sock = makeWASocket({
-        version,
-        logger,
-        printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome'),
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger),
-        },
-        markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: true,
-        syncFullHistory: false
-    });
-
-    // Pairing Code Generation
-    if (!global.sock.authState.creds.registered && config.pairNumber) {
-        await delay(3000);
-        try {
-            pairingCode = await global.sock.requestPairingCode(config.pairNumber);
-            console.log(`\n\x1b[33m[PAIRING CODE]: \x1b[1m${pairingCode}\x1b[0m\n`);
-        } catch (error) {
-            console.error('[ERROR] Pairing failed:', error.message);
-        }
-    }
-
-    global.sock.ev.on('creds.update', saveCreds);
-
-    // Connection Updates
-    global.sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-        
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            
-            console.log(`\x1b[31m[CONNECTION] Closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}\x1b[0m`);
-            
-            if (shouldReconnect) {
-                await delay(3000);
-                connectToWhatsApp();
-            } else {
-                console.log('\x1b[31m[CONNECTION] Logged out. Delete session folder to pair again.\x1b[0m');
-            }
-        } else if (connection === 'open') {
-            console.log('\x1b[32m[CONNECTION] HACKER-MD Connected to WhatsApp Successfully!\x1b[0m');
-            pairingCode = null;
-            
-            // Set bot presence to online
-            await global.sock.sendPresenceUpdate('available');
-        }
-    });
-
-    // Message Handler (Pro Level)
-    global.sock.ev.on('messages.upsert', async (chatUpdate) => {
-        try {
-            const msg = chatUpdate.messages[0];
-            if (!msg.message || msg.key.fromMe) return;
-            if (msg.key.remoteJid === 'status@broadcast') return;
-
-            // Auto Read & Auto Typing (Pro Features)
-            if (config.mode === 'public') {
-                await global.sock.readMessages([msg.key]);
-                await global.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
-            }
-
-            const type = Object.keys(msg.message)[0];
-            const body = (type === 'conversation') ? msg.message.conversation 
-                       : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
-                       : '';
-
-            if (!body.startsWith(config.prefix)) return;
-
-            const args = body.slice(config.prefix.length).trim().split(/ +/);
-            const commandName = args.shift().toLowerCase();
-            
-            // Execute Plugin
-            const plugin = global.plugins.get(commandName);
-            if (plugin) {
-                await plugin.execute(global.sock, msg, args, config);
-            }
-        } catch (error) {
-            console.error('[MESSAGE ERROR]', error);
-        }
-    });
-}
-
-// ================= START ENGINE =================
+// ================= MAIN ENGINE START =================
 (async () => {
-    await loadPlugins();
-    await connectToWhatsApp();
+    displayBanner(); // Stylish Banner display
+    
+    await loadAllPlugins();
+
+    if (config.pairNumbers.length === 0) {
+        console.log('\x1b[31m[ERROR] No PAIR_NUMBERS found in environment.\x1b[0m');
+        process.exit(1);
+    }
+
+    // Multi-Account Support: Loop through all numbers provided
+    for (const number of config.pairNumbers) {
+        console.log(`\x1b[36m[SYSTEM] Starting client for number: ${number}...\x1b[0m`);
+        const client = new BotClient(number);
+        await client.initialize();
+        
+        await delay(2000); 
+    }
 })();
