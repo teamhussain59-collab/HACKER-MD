@@ -12,7 +12,11 @@ import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 
-// ================= GLOBAL ERROR HANDLERS =================
+// ================= GLOBAL VARIABLES & ERROR HANDLERS =================
+global.plugins = new Map();
+global.messageCache = new Map();
+global.antiDeleteStatus = false;
+
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
 process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
 
@@ -99,18 +103,24 @@ class BotClient {
             }
         });
 
+        // ================= MESSAGES UPSERT (Receiving & Caching) =================
         this.sock.ev.on('messages.upsert', async (chatUpdate) => {
             try {
                 const msg = chatUpdate.messages[0];
                 if (!msg.message || msg.key.fromMe) return;
                 if (msg.key.remoteJid === 'status@broadcast') return;
 
-                // ================= AUTO REACT SYSTEM =================
-                // Har message par check karega ke koi plugin onMessage trigger karna chahta hai ya nahi
+                // 1. CACHE MESSAGE FOR ANTI-DELETE
+                const textMsg = msg.message.conversation || msg.message.extendedTextMessage?.text || 'Media';
+                global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
+                if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
+
+                // 2. AUTO REACT SYSTEM
                 for (const [name, p] of global.plugins) {
                     if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
                 }
 
+                // 3. COMMAND HANDLER
                 const type = Object.keys(msg.message)[0];
                 const body = (type === 'conversation') ? msg.message.conversation 
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
@@ -126,7 +136,8 @@ class BotClient {
                 const args = body.slice(config.prefix.length).trim().split(/ +/);
                 const commandName = args.shift().toLowerCase();
 
-                const plugin = global.plugins.get(commandName);
+                const plugin = global.plugins.get(commandName) || Array.from(global.plugins.values()).find(p => p.aliases && p.aliases.includes(commandName));
+                
                 if (plugin) {
                     console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
                     await plugin.execute(this.sock, msg, args, config);
@@ -135,12 +146,23 @@ class BotClient {
                 console.error('\x1b[31m[MESSAGE HANDLER ERROR]\x1b[0m', err);
             }
         });
+
+        // ================= MESSAGES UPDATE (Anti-Delete Trigger) =================
+        this.sock.ev.on('messages.update', async (updates) => {
+            for (const update of updates) {
+                if (update.update.message === null || update.update.messageStubType === 1) {
+                    const plugin = global.plugins.get('antidelete');
+                    if (plugin && plugin.onDelete) {
+                        await plugin.onDelete(this.sock, update);
+                    }
+                }
+            }
+        });
     }
 }
 
 // ================= PLUGIN LOADER =================
-global.plugins = new Map();
-const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js']; // Movie allowed
+const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
 
 async function loadAllPlugins() {
     const pluginsDir = path.join(process.cwd(), 'plugins');
@@ -252,7 +274,6 @@ app.get('/health', (req, res) => res.status(200).send('OK'));
         console.log(`\n\x1b[32m[WEB SERVER] Hacker Page running on port ${config.port}\x1b[0m`);
     });
 
-    // Agar config mein numbers pehle se hain, toh wo auto connect honge
     if (config.pairNumbers && config.pairNumbers.length > 0) {
         for (const number of config.pairNumbers) {
             const client = new BotClient(number);
