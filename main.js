@@ -14,6 +14,7 @@ import { config } from './config.js';
 // ================= GLOBAL VARIABLES & ERROR HANDLERS =================
 global.plugins = new Map();
 global.messageCache = new Map();
+global.botInstances = new Map(); // Active connections ko track karne ke liye
 global.antiDeleteStatus = false;
 
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
@@ -52,7 +53,6 @@ class BotClient {
             version,
             logger,
             printQRInTerminal: false,
-            // Yahan humne "Baileys" ka naam chupa diya hai. Ab yeh Macbook ki tarah show hoga.
             browser: ['Mac OS', 'Safari', '17.0'], 
             auth: {
                 creds: state.creds,
@@ -63,6 +63,9 @@ class BotClient {
         });
 
         this.setupEvents(saveCreds);
+        
+        // Track active instance
+        global.botInstances.set(this.phoneNumber, this);
         return this;
     }
 
@@ -95,11 +98,12 @@ class BotClient {
                 if (shouldReconnect) {
                     await delay(5000);
                     this.initialize();
+                } else {
+                    global.botInstances.delete(this.phoneNumber); // Remove if logged out
                 }
             } else if (connection === 'open') {
                 console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
                 
-                // ================= STYLISH WELCOME MESSAGE =================
                 await delay(2000);
                 try {
                     const botId = this.sock.user.id;
@@ -242,7 +246,7 @@ app.get('/', (req, res) => {
                 const number = document.getElementById('number').value;
                 if(!number) return alert('Please enter a number!');
                 
-                document.getElementById('status').innerText = 'Generating code...';
+                document.getElementById('status').innerText = 'Generating code (Clearing old session)...';
                 document.getElementById('code-box').style.display = 'none';
 
                 try {
@@ -274,11 +278,31 @@ app.post('/api/pair', async (req, res) => {
     const { number } = req.body;
     if (!number) return res.status(400).json({ error: 'Number is required' });
 
+    const cleanNumber = number.replace(/[^0-9]/g, '');
+    const sessionPath = path.join(config.sessionDir, `session_${cleanNumber}`);
+
     try {
-        const client = new BotClient(number);
+        // FIX 1: Agar pehle se koi connection chal raha hai, usko band karein
+        if (global.botInstances.has(cleanNumber)) {
+            const oldBot = global.botInstances.get(cleanNumber);
+            if (oldBot.sock) {
+                oldBot.sock.end(undefined);
+            }
+            global.botInstances.delete(cleanNumber);
+        }
+
+        // FIX 2: Purana kharab session delete karein (Yeh Bad MAC error ka asal ilaj hai)
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log(`\x1b[33m[SESSION] Cleared old session for ${cleanNumber}\x1b[0m`);
+        }
+
+        // Naya bot banayein
+        const client = new BotClient(cleanNumber);
         await client.initialize();
         const code = await client.requestPairingCode();
         res.json({ code: code });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -297,6 +321,7 @@ app.get('/health', (req, res) => res.status(200).send('OK'));
 
     if (config.pairNumbers && config.pairNumbers.length > 0) {
         for (const number of config.pairNumbers) {
+            // Startup par direct connect karega, session delete NAHI karega
             const client = new BotClient(number);
             await client.initialize();
             await delay(2000);
