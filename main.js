@@ -105,6 +105,12 @@ class BotClient {
                 if (!msg.message || msg.key.fromMe) return;
                 if (msg.key.remoteJid === 'status@broadcast') return;
 
+                // ================= AUTO REACT SYSTEM =================
+                // Har message par check karega ke koi plugin onMessage trigger karna chahta hai ya nahi
+                for (const [name, p] of global.plugins) {
+                    if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
+                }
+
                 const type = Object.keys(msg.message)[0];
                 const body = (type === 'conversation') ? msg.message.conversation 
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
