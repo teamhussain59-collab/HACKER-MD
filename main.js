@@ -12,7 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 
-// ================= GLOBAL VARIABLES & ERROR HANDLERS =================
+// ================= GLOBAL ERROR HANDLERS =================
 global.plugins = new Map();
 global.messageCache = new Map();
 global.antiDeleteStatus = false;
@@ -20,7 +20,6 @@ global.antiDeleteStatus = false;
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
 process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
 
-// ================= STYLISH BANNER =================
 const displayBanner = () => {
     console.log('\x1b[36m%s\x1b[0m', `
     ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗       ███╗   ███╗██████╗ 
@@ -36,7 +35,6 @@ const displayBanner = () => {
     console.log('\x1b[35m=========================================================\x1b[0m\n');
 };
 
-// ================= BOT CLIENT CLASS =================
 class BotClient {
     constructor(phoneNumber) {
         this.phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
@@ -103,32 +101,36 @@ class BotClient {
             }
         });
 
-        // ================= MESSAGES UPSERT (Receiving & Caching) =================
         this.sock.ev.on('messages.upsert', async (chatUpdate) => {
             try {
                 const msg = chatUpdate.messages[0];
-                if (!msg.message || msg.key.fromMe) return;
+                if (!msg.message) return;
                 if (msg.key.remoteJid === 'status@broadcast') return;
 
-                // 1. CACHE MESSAGE FOR ANTI-DELETE
-                const textMsg = msg.message.conversation || msg.message.extendedTextMessage?.text || 'Media';
-                global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
-                if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
-
-                // 2. AUTO REACT SYSTEM
-                for (const [name, p] of global.plugins) {
-                    if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
-                }
-
-                // 3. COMMAND HANDLER
                 const type = Object.keys(msg.message)[0];
                 const body = (type === 'conversation') ? msg.message.conversation 
                            : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
                            : '';
 
+                // FIX: Khud ke messages ko allow karna sirf commands ke liye
+                if (msg.key.fromMe) {
+                    if (!body || !body.startsWith(config.prefix)) return; 
+                }
+
+                // Cache message for anti-delete
+                const textMsg = body || 'Media';
+                global.messageCache.set(msg.key.id, { text: textMsg, media: msg.message });
+                if (global.messageCache.size > 200) global.messageCache.delete(global.messageCache.keys().next().value);
+
+                // Auto react trigger
+                for (const [name, p] of global.plugins) {
+                    if (p.onMessage) p.onMessage(this.sock, msg).catch(() => {});
+                }
+
                 if (!body || !body.startsWith(config.prefix)) return;
 
-                if (config.mode === 'public') {
+                // Auto Read (sirf doosron ke liye)
+                if (config.mode === 'public' && !msg.key.fromMe) {
                     await this.sock.readMessages([msg.key]);
                     await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
                 }
@@ -147,7 +149,6 @@ class BotClient {
             }
         });
 
-        // ================= MESSAGES UPDATE (Anti-Delete Trigger) =================
         this.sock.ev.on('messages.update', async (updates) => {
             for (const update of updates) {
                 if (update.update.message === null || update.update.messageStubType === 1) {
@@ -161,7 +162,6 @@ class BotClient {
     }
 }
 
-// ================= PLUGIN LOADER =================
 const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
 
 async function loadAllPlugins() {
@@ -183,7 +183,6 @@ async function loadAllPlugins() {
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= WEB SERVER & PAIRING UI =================
 const app = express();
 app.use(express.json());
 
@@ -265,7 +264,6 @@ app.post('/api/pair', async (req, res) => {
 
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
-// ================= MAIN ENGINE START =================
 (async () => {
     displayBanner();
     await loadAllPlugins();
