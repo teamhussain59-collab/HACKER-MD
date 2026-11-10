@@ -6,18 +6,15 @@ import makeWASocket, {
     Browsers,
     delay
 } from '@whiskeysockets/baileys';
+import express from 'express';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import { config } from './config.js';
 
 // ================= GLOBAL ERROR HANDLERS =================
-process.on('uncaughtException', (err) => {
-    console.error('\x1b[31m[ANTI-CRASH] Uncaught Exception:\x1b[0m', err.message);
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('\x1b[31m[ANTI-CRASH] Unhandled Rejection:\x1b[0m', reason);
-});
+process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
+process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
 
 // ================= STYLISH BANNER =================
 const displayBanner = () => {
@@ -44,9 +41,7 @@ class BotClient {
     }
 
     async initialize() {
-        if (!fs.existsSync(this.sessionPath)) {
-            fs.mkdirSync(this.sessionPath, { recursive: true });
-        }
+        if (!fs.existsSync(this.sessionPath)) fs.mkdirSync(this.sessionPath, { recursive: true });
 
         const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
         const { version } = await fetchLatestBaileysVersion();
@@ -62,15 +57,11 @@ class BotClient {
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
             },
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true,
-            syncFullHistory: false
+            generateHighQualityLinkPreview: true
         });
 
         this.setupEvents(saveCreds);
-        
-        if (!this.sock.authState.creds.registered) {
-            await this.requestPairingCode();
-        }
+        return this;
     }
 
     async requestPairingCode() {
@@ -80,8 +71,10 @@ class BotClient {
             console.log(`\n\x1b[33m╔══════════════════════════════════════════════════╗`);
             console.log(`\x1b[32m   [PAIRING CODE for ${this.phoneNumber}]: \x1b[1m\x1b[36m${code}\x1b[0m\x1b[32m`);
             console.log(`\x1b[33m╚══════════════════════════════════════════════════╝\x1b[0m\n`);
+            return code;
         } catch (error) {
-            console.error(`\x1b[31m[PAIRING ERROR] ${this.phoneNumber}: ${error.message}\x1b[0m`);
+            console.error(`\x1b[31m[PAIRING ERROR]: ${error.message}\x1b[0m`);
+            throw error;
         }
     }
 
@@ -95,7 +88,7 @@ class BotClient {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                console.log(`\x1b[31m[⚠️ ${this.phoneNumber}] Connection Closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}\x1b[0m`);
+                console.log(`\x1b[31m[⚠️ ${this.phoneNumber}] Connection Closed. Reconnecting: ${shouldReconnect}\x1b[0m`);
                 
                 if (shouldReconnect) {
                     await delay(5000);
@@ -112,62 +105,44 @@ class BotClient {
                 if (!msg.message || msg.key.fromMe) return;
                 if (msg.key.remoteJid === 'status@broadcast') return;
 
-                await this.handleMessage(msg);
+                const type = Object.keys(msg.message)[0];
+                const body = (type === 'conversation') ? msg.message.conversation 
+                           : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
+                           : '';
+
+                if (!body || !body.startsWith(config.prefix)) return;
+
+                if (config.mode === 'public') {
+                    await this.sock.readMessages([msg.key]);
+                    await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
+                }
+
+                const args = body.slice(config.prefix.length).trim().split(/ +/);
+                const commandName = args.shift().toLowerCase();
+
+                const plugin = global.plugins.get(commandName);
+                if (plugin) {
+                    console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
+                    await plugin.execute(this.sock, msg, args, config);
+                }
             } catch (err) {
                 console.error('\x1b[31m[MESSAGE HANDLER ERROR]\x1b[0m', err);
             }
         });
     }
-
-    async handleMessage(msg) {
-        const type = Object.keys(msg.message)[0];
-        const body = (type === 'conversation') ? msg.message.conversation 
-                   : (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text 
-                   : '';
-
-        if (!body || !body.startsWith(config.prefix)) return;
-
-        // Public Mode Auto-Read & Typing
-        if (config.mode === 'public') {
-            await this.sock.readMessages([msg.key]);
-            await this.sock.sendPresenceUpdate('composing', msg.key.remoteJid);
-        }
-
-        const args = body.slice(config.prefix.length).trim().split(/ +/);
-        const commandName = args.shift().toLowerCase();
-
-        const plugin = global.plugins.get(commandName);
-        if (plugin) {
-            try {
-                console.log(`\x1b[35m[CMD]\x1b[0m Executing: ${commandName}`);
-                await plugin.execute(this.sock, msg, args, config);
-            } catch (error) {
-                console.error(`\x1b[31m[PLUGIN ERROR: ${commandName}]\x1b[0m`, error);
-            }
-        }
-    }
 }
 
 // ================= PLUGIN LOADER =================
 global.plugins = new Map();
-// OTP aur Numpanel blocked rahenge (Safety policy)
-const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js'];
+const EXCLUDED_PLUGINS = ['otp-forward.js', 'numpanel.js']; // Movie allowed
 
 async function loadAllPlugins() {
     const pluginsDir = path.join(process.cwd(), 'plugins');
-    if (!fs.existsSync(pluginsDir)) {
-        console.log('\x1b[33m[WARN] No plugins directory found.\x1b[0m');
-        return;
-    }
+    if (!fs.existsSync(pluginsDir)) return;
 
     const files = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
-    
     for (const file of files) {
-        if (EXCLUDED_PLUGINS.includes(file)) {
-            console.log(`\x1b[31m[BLOCKED] ${file} (Excluded by rules)\x1b[0m`);
-            continue;
-        }
-
+        if (EXCLUDED_PLUGINS.includes(file)) continue;
         try {
             const module = await import(`./plugins/${file}`);
             if (module.default && module.default.command) {
@@ -180,23 +155,103 @@ async function loadAllPlugins() {
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= MAIN ENGINE START =================
-(async () => {
-    displayBanner(); // Stylish Banner display
-    
-    await loadAllPlugins();
+// ================= WEB SERVER & PAIRING UI =================
+const app = express();
+app.use(express.json());
 
-    if (config.pairNumbers.length === 0) {
-        console.log('\x1b[31m[ERROR] No PAIR_NUMBERS found in environment.\x1b[0m');
-        process.exit(1);
-    }
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>HACKER-MD Pairing</title>
+        <style>
+            body { background-color: #0d1117; color: #00ff00; font-family: 'Courier New', Courier, monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .container { background: #161b22; padding: 30px; border-radius: 10px; border: 1px solid #00ff00; box-shadow: 0 0 15px #00ff00; text-align: center; width: 90%; max-width: 400px; }
+            h1 { margin-top: 0; font-size: 24px; text-shadow: 0 0 10px #00ff00; }
+            input { width: 90%; padding: 10px; margin: 15px 0; background: #0d1117; border: 1px solid #00ff00; color: #00ff00; font-size: 16px; outline: none; }
+            button { background: #00ff00; color: #0d1117; border: none; padding: 10px 20px; font-size: 16px; cursor: pointer; font-weight: bold; width: 100%; }
+            button:hover { background: #00cc00; }
+            #code-box { margin-top: 20px; font-size: 28px; font-weight: bold; color: #fff; text-shadow: 0 0 10px #fff; letter-spacing: 5px; display: none; }
+            #status { margin-top: 15px; font-size: 14px; color: #888; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>HACKER-MD</h1>
+            <p>Enter bot's WhatsApp number</p>
+            <input type="text" id="number" placeholder="e.g. 923001234567">
+            <button onclick="getCode()">Get Pairing Code</button>
+            <div id="code-box"></div>
+            <div id="status"></div>
+        </div>
 
-    // Multi-Account Support: Loop through all numbers provided
-    for (const number of config.pairNumbers) {
-        console.log(`\x1b[36m[SYSTEM] Starting client for number: ${number}...\x1b[0m`);
+        <script>
+            async function getCode() {
+                const number = document.getElementById('number').value;
+                if(!number) return alert('Please enter a number!');
+                
+                document.getElementById('status').innerText = 'Generating code...';
+                document.getElementById('code-box').style.display = 'none';
+
+                try {
+                    const res = await fetch('/api/pair', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ number: number })
+                    });
+                    const data = await res.json();
+                    
+                    if(data.code) {
+                        document.getElementById('code-box').innerText = data.code;
+                        document.getElementById('code-box').style.display = 'block';
+                        document.getElementById('status').innerText = 'Enter this code in WhatsApp (Linked Devices).';
+                    } else {
+                        document.getElementById('status').innerText = 'Error: ' + (data.error || 'Unknown error');
+                    }
+                } catch (err) {
+                    document.getElementById('status').innerText = 'Failed to connect to server.';
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+app.post('/api/pair', async (req, res) => {
+    const { number } = req.body;
+    if (!number) return res.status(400).json({ error: 'Number is required' });
+
+    try {
         const client = new BotClient(number);
         await client.initialize();
-        
-        await delay(2000); 
+        const code = await client.requestPairingCode();
+        res.json({ code: code });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
+// ================= MAIN ENGINE START =================
+(async () => {
+    displayBanner();
+    await loadAllPlugins();
+
+    app.listen(config.port, () => {
+        console.log(`\n\x1b[32m[WEB SERVER] Hacker Page running on port ${config.port}\x1b[0m`);
+    });
+
+    // Agar config mein numbers pehle se hain, toh wo auto connect honge
+    if (config.pairNumbers && config.pairNumbers.length > 0) {
+        for (const number of config.pairNumbers) {
+            const client = new BotClient(number);
+            await client.initialize();
+            await delay(2000);
+        }
     }
 })();
