@@ -40,3 +40,4 @@ jobs:
           OWNER_NUMBER: ${{ secrets.OWNER_NUMBER }}
           PAIR_NUMBERS: ${{ secrets.PAIR_NUMBERS }}
         run: node index.js
+        
