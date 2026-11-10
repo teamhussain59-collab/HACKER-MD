@@ -6,6 +6,9 @@ export default {
         const time = new Date().toLocaleTimeString('en-US', { timeZone: config.tz, hour12: true });
         const date = new Date().toLocaleDateString('en-GB', { timeZone: config.tz });
         const channelUrl = 'https://whatsapp.com/channel/0029Vb9FRVV8F2pDezlyrD0q';
+        
+        // Aap ki README wali picture ka link
+        const imageUrl = 'https://n.uguu.se/mthRRtqg.jpg';
 
         const menuText = `
 ╭━━━〔 *${config.botName}* 〕━━━⬣
@@ -106,8 +109,10 @@ export default {
 > *Stay tuned for more updates...*
 `;
 
+        // Menu ko image ke sath send karna
         await sock.sendMessage(msg.key.remoteJid, {
-            text: menuText,
+            image: { url: imageUrl },
+            caption: menuText,
             contextInfo: {
                 forwardingScore: 999,
                 isForwarded: true,
