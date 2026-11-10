@@ -1,0 +1,42 @@
+name: HACKER-MD Pairing Test
+
+on:
+  workflow_dispatch: # Iska matlab hai aap manually button dabaa kar start karenge
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # GitHub ki limit ke mutabiq
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install System Dependencies (ffmpeg, yt-dlp)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3 curl
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
+      - name: Install Node Dependencies
+        run: npm install
+
+      - name: Start HACKER-MD
+        env:
+          WEB: "true"
+          PORT: "3000"
+          PREFIX: "."
+          TZ: "Asia/Karachi"
+          MODE: "public"
+          MULTI: "true"
+          NODE_ENV: "production"
+          # Aap ke GitHub Secrets se values uthaye ja rahe hain
+          OWNER_NUMBER: ${{ secrets.OWNER_NUMBER }}
+          PAIR_NUMBERS: ${{ secrets.PAIR_NUMBERS }}
+        run: node index.js
