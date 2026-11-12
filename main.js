@@ -16,6 +16,7 @@ global.plugins = new Map();
 global.messageCache = new Map();
 global.botInstances = new Map(); 
 
+// Crash se bachne ke liye global handlers
 process.on('uncaughtException', (err) => console.error('\x1b[31m[ANTI-CRASH] Exception:\x1b[0m', err.message));
 process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH] Rejection:\x1b[0m', reason));
 
@@ -52,13 +53,14 @@ class BotClient {
             version,
             logger,
             printQRInTerminal: false,
-            browser: ['Mac OS', 'Safari', '17.0'], 
+            browser: ['Mac OS', 'Safari', '17.0'], // Spoofing (No Baileys name)
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger),
             },
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: true,
+            // BAD MAC FIX (WhatsApp ko lagta hai purane messages cache se aaye hain)
             getMessage: async (key) => {
                 if (global.messageCache.has(key.id)) return global.messageCache.get(key.id).media;
                 return { conversation: 'PROFACHNEL' };
@@ -114,6 +116,8 @@ class BotClient {
                 if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
 
                 const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+                
+                // Cache for getMessage fix
                 global.messageCache.set(msg.key.id, { text: body, media: msg.message });
                 if (global.messageCache.size > 500) global.messageCache.delete(global.messageCache.keys().next().value);
 
@@ -145,7 +149,9 @@ async function loadAllPlugins() {
         try {
             const module = await import(`./plugins/${file}`);
             if (module.default && module.default.command) global.plugins.set(module.default.command.toLowerCase(), module.default);
-        } catch (err) {}
+        } catch (err) {
+            console.error(`\x1b[31m[PLUGIN LOAD ERROR] ${file}:\x1b[0m`, err.message);
+        }
     }
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
