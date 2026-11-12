@@ -9,7 +9,6 @@ import express from 'express';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
-import axios from 'axios';
 import { config } from './config.js';
 
 // ================= GLOBAL VARIABLES & ERROR HANDLERS =================
@@ -22,12 +21,12 @@ process.on('unhandledRejection', (reason) => console.error('\x1b[31m[ANTI-CRASH]
 
 const displayBanner = () => {
     console.log('\x1b[36m%s\x1b[0m', `
-    ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗       ███╗   ███╗██████╗ 
-    ██║  ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗      ████╗ ████║██╔══██╗
-    ███████║███████║██║     █████╔╝ █████╗  ██████╔╝████╗ ██╔████╔██║██║  ██║
-    ██╔══██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗╚═══╝ ██║╚██╔╝██║██║  ██║
-    ██║  ██║██║  ██║╚██████╗██║  ██╗███████╗██║  ██║      ██║ ╚═╝ ██║██████╔╝
-    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝      ╚═╝     ╚═╝╚═════╝ 
+    ██████╗ ██████╗  ██████╗ ███████╗ █████╗  ██████╗██╗  ██╗███╗   ██╗███████╗██╗     
+    ██╔══██╗██╔══██╗██╔═══██╗██╔════╝██╔══██╗██╔════╝██║  ██║████╗  ██║██╔════╝██║     
+    ██████╔╝██████╔╝██║   ██║█████╗  ███████║██║     ███████║██╔██╗ ██║█████╗  ██║     
+    ██╔═══╝ ██╔══██╗██║   ██║██╔══╝  ██╔══██║██║     ██╔══██║██║╚██╗██║██╔══╝  ██║     
+    ██║     ██║  ██║╚██████╔╝██║     ██║  ██║╚██████╗██║  ██║██║ ╚████║███████╗███████╗
+    ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
     `);
     console.log('\x1b[35m=========================================================\x1b[0m');
     console.log('\x1b[33m       >> ULTIMATE WHATSAPP BOT ENGINE <<\x1b[0m');
@@ -60,16 +59,29 @@ class BotClient {
             },
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: true,
-            // BAD MAC FIX (WhatsApp ko lagta hai purane messages cache se aaye hain)
             getMessage: async (key) => {
                 if (global.messageCache.has(key.id)) return global.messageCache.get(key.id).media;
-                return { conversation: 'HACKER-MD' };
+                return { conversation: 'PROFACHNEL' };
             }
         });
 
         this.setupEvents(saveCreds);
         global.botInstances.set(this.phoneNumber, this);
         return this;
+    }
+
+    async requestPairingCode() {
+        await delay(3000);
+        try {
+            const code = await this.sock.requestPairingCode(this.phoneNumber);
+            console.log(`\n\x1b[33m╔══════════════════════════════════════════════════╗`);
+            console.log(`\x1b[32m   [PAIRING CODE for ${this.phoneNumber}]: \x1b[1m\x1b[36m${code}\x1b[0m\x1b[32m`);
+            console.log(`\x1b[33m╚══════════════════════════════════════════════════╝\x1b[0m\n`);
+            return code;
+        } catch (error) {
+            console.error(`\x1b[31m[PAIRING ERROR]: ${error.message}\x1b[0m`);
+            throw error;
+        }
     }
 
     setupEvents(saveCreds) {
@@ -85,12 +97,12 @@ class BotClient {
                     this.initialize().catch(() => {});
                 }
             } else if (connection === 'open') {
-                console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] HACKER-MD CONNECTED SUCCESSFULLY!\x1b[0m\n`);
+                console.log(`\n\x1b[32m[✅ ${this.phoneNumber}] PROFACHNEL CONNECTED SUCCESSFULLY!\x1b[0m\n`);
                 
                 await delay(2000);
                 try {
                     const botId = this.sock.user.id;
-                    const welcomeText = `✅ *HACKER-MD IS ONLINE!*\n\nBot successfully connected to your WhatsApp.\nType ${config.prefix}menu to start.`;
+                    const welcomeText = `✅ *PROFACHNEL IS ONLINE!*\n\nBot successfully connected to your WhatsApp.\nType ${config.prefix}menu to start.`;
                     await this.sock.sendMessage(botId, { text: welcomeText });
                 } catch (err) {}
             }
@@ -103,6 +115,7 @@ class BotClient {
 
                 const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
                 global.messageCache.set(msg.key.id, { text: body, media: msg.message });
+                if (global.messageCache.size > 500) global.messageCache.delete(global.messageCache.keys().next().value);
 
                 if (msg.key.fromMe && (!body || !body.startsWith(config.prefix))) return;
                 if (!body.startsWith(config.prefix)) return;
@@ -137,43 +150,135 @@ async function loadAllPlugins() {
     console.log(`\x1b[36m[SYSTEM] Loaded ${global.plugins.size} plugins successfully.\x1b[0m`);
 }
 
-// ================= WEB SERVER & SMART START (Fallback Setup) =================
+// ================= PROFACHNEL WEB SERVER & PAIRING PAGE =================
 const app = express();
 app.use(express.json());
-app.get('/', (req, res) => res.send('HACKER-MD is Alive!'));
-app.get('/health', (req, res) => res.status(200).send('OK'));
 
-app.listen(config.port, () => {
-    console.log(`\n\x1b[32m[WEB SERVER] Running on port ${config.port}\x1b[0m`);
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>PROFACHNEL Pairing</title>
+        <style>
+            body { background-color: #0a0a0a; color: #00ffcc; font-family: 'Courier New', Courier, monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .container { background: #121212; padding: 30px; border-radius: 10px; border: 1px solid #00ffcc; box-shadow: 0 0 20px rgba(0,255,204,0.2); text-align: center; width: 90%; max-width: 400px; }
+            h1 { margin-top: 0; font-size: 26px; text-shadow: 0 0 10px #00ffcc; letter-spacing: 2px;}
+            p { color: #888; font-size: 14px; }
+            input { width: 90%; padding: 12px; margin: 10px 0; background: #1a1a1a; border: 1px solid #00ffcc; color: #00ffcc; font-size: 16px; outline: none; border-radius: 5px; }
+            button { background: #00ffcc; color: #000; border: none; padding: 12px 20px; font-size: 16px; cursor: pointer; font-weight: bold; width: 100%; border-radius: 5px; transition: 0.3s; }
+            button:hover { background: #00cca3; }
+            #code-box { margin-top: 20px; font-size: 28px; font-weight: bold; color: #fff; text-shadow: 0 0 10px #fff; letter-spacing: 5px; display: none; padding: 15px; border: 1px dashed #00ffcc; border-radius: 5px;}
+            #status { margin-top: 15px; font-size: 14px; color: #ffaa00; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>PROFACHNEL</h1>
+            <p>Enter Password to unlock</p>
+            <input type="password" id="password" placeholder="Admin Password">
+            <button onclick="unlock()">Unlock Page</button>
+            
+            <div id="pair-section" style="display:none; margin-top:20px;">
+                <p>Enter bot's WhatsApp number</p>
+                <input type="text" id="number" placeholder="e.g. 923001234567">
+                <button onclick="getCode()">Get Pairing Code</button>
+            </div>
+
+            <div id="code-box"></div>
+            <div id="status"></div>
+        </div>
+
+        <script>
+            let adminPass = "";
+
+            function unlock() {
+                adminPass = document.getElementById('password').value;
+                if(!adminPass) return alert('Enter Password!');
+                document.getElementById('pair-section').style.display = 'block';
+                document.getElementById('status').innerText = 'Page Unlocked.';
+            }
+
+            async function getCode() {
+                const number = document.getElementById('number').value;
+                if(!number) return alert('Please enter a number!');
+                
+                document.getElementById('status').innerText = 'Generating code...';
+                document.getElementById('code-box').style.display = 'none';
+
+                try {
+                    const res = await fetch('/api/pair', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ number: number, password: adminPass })
+                    });
+                    const data = await res.json();
+                    
+                    if(data.code) {
+                        document.getElementById('code-box').innerText = data.code;
+                        document.getElementById('code-box').style.display = 'block';
+                        document.getElementById('status').innerText = 'Enter this code in WhatsApp (Linked Devices).';
+                    } else {
+                        document.getElementById('status').innerText = 'Error: ' + (data.error || 'Unknown error');
+                    }
+                } catch (err) {
+                    document.getElementById('status').innerText = 'Failed to connect to server.';
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `);
 });
 
+app.post('/api/pair', async (req, res) => {
+    const { number, password } = req.body;
+    
+    // Password Check
+    if (password !== config.adminPassword) {
+        return res.status(401).json({ error: 'Invalid Password' });
+    }
+    if (!number) return res.status(400).json({ error: 'Number is required' });
+
+    const cleanNumber = number.replace(/[^0-9]/g, '');
+    const sessionPath = path.join(config.sessionDir, `session_${cleanNumber}`);
+
+    try {
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+        }
+
+        const client = new BotClient(cleanNumber);
+        await client.initialize();
+        const code = await client.requestPairingCode();
+        res.json({ code: code });
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
+// ================= MAIN ENGINE START =================
 (async () => {
     displayBanner();
     await loadAllPlugins();
 
-    const isGitHub = process.env.GITHUB_ACTIONS === 'true';
+    app.listen(config.port, () => {
+        console.log(`\n\x1b[32m[WEB SERVER] PROFACHNEL running on port ${config.port}\x1b[0m`);
+    });
 
-    if (isGitHub) {
-        console.log('\x1b[33m[GITHUB FALLBACK] GitHub par chal raha hai. Railway ka wait kar rahe hain...\x1b[0m');
-        
-        if (process.env.RAILWAY_URL) {
-            setInterval(async () => {
-                try {
-                    const res = await axios.get(`${process.env.RAILWAY_URL}/health`, { timeout: 5000 });
-                    if (res.status === 200) {
-                        console.log('\x1b[32m[RAILWAY ONLINE] Railway deploy ho gaya hai. GitHub se bot band kiya ja raha hai...\x1b[0m');
-                        process.exit(0); // GitHub runner ko band kar dega
-                    }
-                } catch (e) {
-                    // Railway abhi offline hai, GitHub chalta rahega
-                }
-            }, 15000); 
-        }
-    }
-
-    // Bot start karein (Dono jagah chalega, SESSION_ID se connect hoga)
+    // Agar Railway mein PAIR_NUMBERS set hai toh auto connect karega
     if (config.pairNumbers.length > 0) {
-        const client = new BotClient(config.pairNumbers[0]);
-        await client.initialize().catch(err => console.error(err.message));
+        for (const number of config.pairNumbers) {
+            if(number) {
+                const client = new BotClient(number);
+                await client.initialize().catch(err => console.error(err.message));
+                await delay(2000);
+            }
+        }
     }
 })();
