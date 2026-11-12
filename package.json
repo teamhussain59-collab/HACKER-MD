@@ -1,6 +1,7 @@
 {
   "name": "hacker-md",
   "version": "1.0.0",
+  "description": "HACKER-MD - WhatsApp bot by Hussain",
   "type": "module",
   "main": "index.js",
   "scripts": {
