@@ -1,7 +1,6 @@
 {
   "name": "hacker-md",
   "version": "1.0.0",
-  "description": "HACKER-MD - WhatsApp bot by Hussain",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -11,6 +10,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
+    "@napi-rs/canvas": "^0.1.53",
     "@whiskeysockets/baileys": "^6.7.18",
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
